@@ -1,4 +1,4 @@
-# ⚡ KVServer
+# KVServer
 
 A in-memory key-value store server written in C++, inspired by Redis.
 It supports string keys, sorted sets (ZSETs), and time-to-live (TTL) expiration.
@@ -6,7 +6,7 @@ The server communicates over a custom binary protocol via TCP, and includes a Py
 
 ---
 
-## 🛠 Features
+## Features
 
 - Basic operations: `SET`, `GET`, `DEL`, `KEYS`
 - Expiration support: `PEXPIRE`, `PTTL`
@@ -19,7 +19,7 @@ The server communicates over a custom binary protocol via TCP, and includes a Py
 
 ---
 
-📡 Protocol Format
+## Protocol Format
 
 Binary protocol:
 ```yaml
@@ -31,7 +31,7 @@ Binary protocol:
 ]
 ```
 
-## 📂 Project Structure
+## Project Structure
 
 ```console
 kvserver/
@@ -46,9 +46,9 @@ kvserver/
 └── README.md # This file
 ```
 ---
-## 🚀 Getting Started
+## Getting Started
 
-### 🔧 Prerequisites
+### Prerequisites
 
 - Linux
 - CMake ≥ 3.10
@@ -56,7 +56,7 @@ kvserver/
 - Python ≥ 3.6 (for client)
 ---
 
-### ⚙️ Build Instructions
+## Build Instructions
 
 ```bash
 # Clone the repo
@@ -73,25 +73,25 @@ cmake ..
 make
 ```
 ---
-▶️ Run the Server
+ #### Run the Server
 ```bash
 ./kvserver
 ```
-Output:
+  #### Output:
 ```bash
 the server is listening
 ```
-❓ For Help section 
+ #### For Help section 
 ```bash
 ./kvserver help
 ```
 ---
 
-💻 Python Client
+## Python Client
 
 A Python client is available to send commands and test the server.
 
-✨ Example Usage
+#### Example Usage
 
 Update the <b>HOST</b> variable in client.py to match the IP address of the machine where the server is running:
 
@@ -99,7 +99,7 @@ Update the <b>HOST</b> variable in client.py to match the IP address of the mach
 python3 client.py
 ```
 ---
-📖 Commands Supported
+## Commands Supported
 
 | Command                                             | Description                      |
 |-----------------------------------------------------|----------------------------------|
@@ -114,7 +114,7 @@ python3 client.py
 | `zscore <zset> <name>`                              | Get score of a member            |
 | `zquery <zset> <score> <name> <offset> <limit>`     | Range query                      |
 
-### 🔍 Sample Commands Tested
+###  Sample Commands Tested
 
 ```bash
 set age 12
@@ -128,7 +128,7 @@ zscore leaderboard Alice
 keys
 ```
 ---
-⚠️ Notes
+ ## Notes
 
 - Server listens on port 8085
 
