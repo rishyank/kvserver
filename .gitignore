@@ -1,0 +1,15 @@
+# === Build output ===
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# === VS Code ===
+.vscode/
+
+
+__pycache__/
+*.pyc
+*.pyo
+
