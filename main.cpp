@@ -23,7 +23,7 @@
 #include "list.h"
 #include "heap.h"
 
-#define MAX_EVENTS 10
+#define MAX_EVENTS 20
 #define PORT 8085
 
 volatile sig_atomic_t stop = 0;
@@ -59,7 +59,7 @@ static void fd_set_nb(int fd) {
     }
 }
 
-const size_t k_max_msg = 4096*12;
+const size_t k_max_msg = 4096;
 const size_t k_max_args = 1024;
 
 enum {
@@ -209,42 +209,46 @@ static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn) {
 }
 
 static int32_t accept_new_conn(std::vector<Conn *> &fd2conn, int epfd, int fd) {
-    // accept
     struct sockaddr_in client_addr = {};
     socklen_t socklen = sizeof(client_addr);
-    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
-    if (connfd < 0) {
-        msg("accept() failed");
-        return -1;  // error
+
+    while (true) {
+        int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
+        if (connfd == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            perror("accept");
+            return -1;
+        }
+
+        fd_set_nb(connfd);
+
+        Conn *conn = (Conn *)malloc(sizeof(Conn));
+        if (!conn) {
+            close(connfd);
+            continue;
+        }
+
+        conn->fd = connfd;
+        conn->state = STATE_REQ;
+        conn->rbuf_size = 0;
+        conn->wbuf_size = 0;
+        conn->wbuf_sent = 0;
+        conn->idle_start = get_monotonic_usec();
+        dlist_insert_before(&g_data.idle_list, &conn->idle_list);
+        conn_put(fd2conn, conn);
+
+        struct epoll_event event = {};
+        event.data.fd = connfd;
+        event.events = EPOLLIN | EPOLLET;
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &event) < 0) {
+            perror("epoll_ctl");
+            return -1;
+        }
     }
 
-    // set the new connection fd to nonblocking mode
-    fd_set_nb(connfd);
-    
-    // creating the struct Conn
-    struct Conn *conn = (struct Conn *)malloc(sizeof(struct Conn));
-    if (!conn) {
-        close(connfd);
-        return -1;
-    }
-    conn->fd = connfd;
-    conn->state = STATE_REQ;
-    conn->rbuf_size = 0;
-    conn->wbuf_size = 0;
-    conn->wbuf_sent = 0;
-    conn->idle_start = get_monotonic_usec();
-    dlist_insert_before(&g_data.idle_list, &conn->idle_list);
-    conn_put(g_data.fd2conn, conn);
-
-    // Register the new connection with epoll
-    struct epoll_event event = {};
-    event.data.fd = connfd;
-    event.events = EPOLLIN | EPOLLET;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &event) < 0) {
-        die("epoll_ctl() error");
-    }
     return 0;
 }
+
 
 static void state_req(Conn *conn);
 static void state_res(Conn *conn);
@@ -638,7 +642,8 @@ static bool try_one_request(Conn *conn) {
     
     if (0 != parse_req(&conn->rbuf[4],len,cmd)){
         msg("bad req");
-        return -1;
+        conn->state = STATE_END;
+        return false; // fixed here!
     } 
     std::string out;
     do_request(cmd, out);
@@ -705,30 +710,26 @@ static void state_req(Conn *conn) {
     while (try_fill_buffer(conn)) {}
 }
 
+
 static bool try_flush_buffer(Conn *conn) {
-    ssize_t rv = 0;
-    do {
-        size_t remain = conn->wbuf_size - conn->wbuf_sent;
-        rv = write(conn->fd, &conn->wbuf[conn->wbuf_sent], remain);
-    } while (rv < 0 && errno == EINTR);
-    if (rv < 0 && errno == EAGAIN) {
-        return false;
+    while (conn->wbuf_sent < conn->wbuf_size) {
+        ssize_t rv = write(conn->fd, &conn->wbuf[conn->wbuf_sent], conn->wbuf_size - conn->wbuf_sent);
+        if (rv == -1) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN) return true;
+            msg("write() error");
+            conn->state = STATE_END;
+            return false;
+        }
+        conn->wbuf_sent += (size_t)rv;
     }
-    if (rv < 0) {
-        msg("write() error");
-        conn->state = STATE_END;
-        return false;
-    }
-    conn->wbuf_sent += (size_t)rv;
-    assert(conn->wbuf_sent <= conn->wbuf_size);
-    if (conn->wbuf_sent == conn->wbuf_size) {
-        conn->state = STATE_REQ;
-        conn->wbuf_sent = 0;
-        conn->wbuf_size = 0;
-        return false;
-    }
-    return true;
+
+    conn->state = STATE_REQ;
+    conn->wbuf_sent = 0;
+    conn->wbuf_size = 0;
+    return false;
 }
+
 
 static void state_res(Conn *conn) {
     while (try_flush_buffer(conn)) {}
@@ -748,19 +749,19 @@ static void connection_io(Conn *conn) {
     }
 }
 
-const uint64_t k_idle_timeout_ms = 5 * 1000;
+const uint64_t k_idle_timeout_ms = 60 * 1000;
 
 static uint32_t next_timer_ms() {
     if (dlist_empty(&g_data.idle_list)) {
         //printf("No timers. Default timeout: 10000ms\n");
-        return 10000;   // no timer, the value doesn't matter
+        return k_idle_timeout_ms;   // no timer, the value doesn't matter
     }
 
     uint64_t now_us = get_monotonic_usec();
     Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
     uint64_t next_us = next->idle_start + k_idle_timeout_ms * 1000;
     if (next_us <= now_us) {
-        //printf("Timer expired for fd: %d\n", next->fd);
+
         return 0;
     }
 
@@ -770,10 +771,12 @@ static uint32_t next_timer_ms() {
 
 
 static void conn_done(Conn *conn) {
+ 
     g_data.fd2conn[conn->fd] = NULL;
     (void)close(conn->fd);
     dlist_detach(&conn->idle_list);
     free(conn);
+    
 }
 
 static bool hnode_same(HNode *lhs, HNode *rhs) {
@@ -788,7 +791,6 @@ static void process_timers() {
             // not ready, the extra 1000us is for the ms resolution of poll()
             break;
         }
-        //printf("removing idle connection: %d\n", next->fd);
         conn_done(next);
     }
 
@@ -843,7 +845,7 @@ int main(int argc, char *argv[]) {
     // bind
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
-    addr.sin_port = ntohs(PORT);
+    addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = ntohl(0);    // wildcard address 0.0.0.0
     int rv = bind(fd, (const sockaddr *)&addr, sizeof(addr));
     if (rv) {
@@ -867,7 +869,7 @@ int main(int argc, char *argv[]) {
     // Register the listening socket
     struct epoll_event event = {};
     event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET;
+    event.events = EPOLLIN;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &event) < 0) {
         close(fd); // Clean up server socket
         close(epfd); // Clean up epoll instance
@@ -875,13 +877,15 @@ int main(int argc, char *argv[]) {
     }
 
     // the event loop
-    struct epoll_event events[10];
+    struct epoll_event events[MAX_EVENTS];
     printf("%s\n","the server is listening");
     signal(SIGINT, handle_signal);
 
     while (!stop) {
-        int timeout_ms = (int)next_timer_ms();
-        int nfds = epoll_wait(epfd, events, MAX_EVENTS,timeout_ms); // blocking operation 
+        int timeout_ms = (int)next_timer_ms(); // Ingnoring timeouts
+      
+        int nfds = epoll_wait(epfd, events, MAX_EVENTS,-1); // blocking operation 
+     
         if (nfds < 0) {
             if (errno == EINTR) continue; // Interrupted by signal, retry
             die("epoll_wait()");
@@ -901,8 +905,9 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
+        
         // handle timers
-        process_timers();
+        // process_timers();
     }
     close(epfd);
     close(fd);
