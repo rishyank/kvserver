@@ -131,9 +131,6 @@ keys
  ## Notes
 
 - Server listens on port 8085
-
-- Connections are closed after 5s of inactivity
-
+- Connections are closed after each read/response cycle.Not yet suitbale for connection pooling on client side.
 - TTL eviction is handled periodically using a min-heap
-
 - This is a prototype — no persistence or replication (yet)
